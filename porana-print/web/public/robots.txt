@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /cart
+Disallow: /success
+
+Sitemap: https://poranaprint.co.nz/sitemap.xml
