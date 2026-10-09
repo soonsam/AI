@@ -1,0 +1,16 @@
+# Windows / OneDrive
+Thumbs.db
+Desktop.ini
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# Node
+node_modules/
+dist/
+
+# OpenCode
+.opencode/
