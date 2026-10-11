@@ -85,7 +85,7 @@ async function logout() {
         </RouterLink>
         <button
           @click="logout"
-          class="hidden sm:block text-white sm:px-3 py-3 hover:underline"
+          class="hidden sm:block text-white sm:px-3 py-3 rounded-lg bg-transparent hover:bg-cblue hover:bg-opacity-10"
         >
           LOG OUT
         </button>
