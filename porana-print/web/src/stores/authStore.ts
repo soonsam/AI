@@ -75,6 +75,19 @@ export const useAuthStore = defineStore("auth", () => {
     return current ? current.getIdToken() : null;
   }
 
+  // Best-effort: record the user in Firestore. Never blocks login.
+  async function syncUser(u: User): Promise<void> {
+    try {
+      const token = await u.getIdToken();
+      await fetch(`${import.meta.env.VITE_API_URL}/auth/sync`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (e) {
+      console.warn("User sync failed:", e);
+    }
+  }
+
   async function register(
     name: string,
     email: string,
@@ -92,6 +105,7 @@ export const useAuthStore = defineStore("auth", () => {
         await updateProfile(cred.user, { displayName: name.trim() });
       }
       user.value = toAuthUser({ ...cred.user, displayName: name.trim() || cred.user.displayName } as User);
+      await syncUser(cred.user);
       return true;
     } catch (e: unknown) {
       error.value = friendlyError((e as { code?: string }).code ?? "");
@@ -111,6 +125,7 @@ export const useAuthStore = defineStore("auth", () => {
         password
       );
       user.value = toAuthUser(cred.user);
+      await syncUser(cred.user);
       return true;
     } catch (e: unknown) {
       error.value = friendlyError((e as { code?: string }).code ?? "");
@@ -129,6 +144,7 @@ export const useAuthStore = defineStore("auth", () => {
         new GoogleAuthProvider()
       );
       user.value = toAuthUser(cred.user);
+      await syncUser(cred.user);
       return true;
     } catch (e: unknown) {
       error.value = friendlyError((e as { code?: string }).code ?? "");
