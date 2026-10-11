@@ -83,17 +83,19 @@ const uploadFileToGCS = async (
     contentType: mimeType,
   });
 
-  const options = {
-    version: "v4",
-    action: "read",
-    expires: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
-    responseDisposition: "inline", // Ensure the file opens in the browser
-  };
-
-  const [url] = await file.getSignedUrl(options);
+  const [url] = await file.getSignedUrl(signedUrlOptions());
 
   return url; // Return the signed URL
 };
+
+// Fresh 7-day read links are minted on demand, so stored files never rely
+// on an old URL. The objects themselves stay in the bucket indefinitely.
+const signedUrlOptions = () => ({
+  version: "v4",
+  action: "read",
+  expires: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days
+  responseDisposition: "inline", // Ensure the file opens in the browser
+});
 
 const addOrderDoc = async (order) => {
   const counterRef = db.collection("counters").doc("orders");
@@ -285,7 +287,24 @@ app.post("/upload", uploadLimiter, upload.single("file"), async (req, res) => {
 
     // Server-generated filename — never persist the client-supplied originalname
     const extension = ALLOWED_MIME_TYPES[detected.mime];
-    const destinationFileName = `uploads/${uuidv4()}.${extension}`;
+
+    // Optional auth: logged-in users get the file linked to their account
+    // under their own prefix. Guests keep the existing shared behaviour.
+    let ownerUid = null;
+    try {
+      const header = req.headers.authorization ?? "";
+      const idToken = header.startsWith("Bearer ") ? header.slice(7) : "";
+      if (idToken) {
+        const decoded = await admin.auth().verifyIdToken(idToken);
+        ownerUid = decoded.uid;
+      }
+    } catch {
+      ownerUid = null;
+    }
+
+    const destinationFileName = ownerUid
+      ? `users/${ownerUid}/${uuidv4()}.${extension}`
+      : `uploads/${uuidv4()}.${extension}`;
 
     const bucketName = "porana-print";
     const url = await uploadFileToGCS(
@@ -295,9 +314,24 @@ app.post("/upload", uploadLimiter, upload.single("file"), async (req, res) => {
       detected.mime,
     );
 
+    let fileId = null;
+    if (ownerUid) {
+      const metaRef = await db.collection("userFiles").add({
+        uid: ownerUid,
+        name: String(req.body.name || destinationFileName).slice(0, 200),
+        size: file.size,
+        mime: detected.mime,
+        gcsPath: destinationFileName,
+        uploadedAt: new Date().toISOString(),
+        usedInOrderIds: [],
+      });
+      fileId = metaRef.id;
+    }
+
     return res.status(200).send({
       message: "File uploaded successfully!",
       fileUrl: url,
+      fileId,
     });
   } catch (error) {
     console.error("Error uploading file:", error);
@@ -337,13 +371,14 @@ app.get("/shipping/get-price", async (req, res) => {
 // Define the endpoint to get the shipping options
 app.get("/api/shipping-options", (req, res) => {
   const shippingOptions = [
-    { id: "shr_1QBP2WGB5LZAemm9uTtzotZc", label: "Pick Up" },
-    { id: "shr_1TlT0WGB5LZAemm9OYVHBqp9", label: "Auckland" },
-    { id: "shr_1TlT2UGB5LZAemm9sdDUXJAM", label: "Auckland (Rural)" },
-    { id: "shr_1TlT5gGB5LZAemm9hbOzTyPo", label: "North Island" },
-    { id: "shr_1TlT7HGB5LZAemm9nGWEbdgc", label: "North Island (Rural)" },
-    { id: "shr_1QBRToGB5LZAemm9OslOlDev", label: "South Island" },
-    { id: "shr_1TlTBQGB5LZAemm96K4uaCgI", label: "South Island (Rural)" },
+    // LOCAL-TEST ONLY: test-mode IDs. DO NOT COMMIT - revert after testing.
+    { id: "shr_1PwyO0GB5LZAemm9kjNh65jZ", label: "Pick Up" },
+    { id: "shr_1PzUyRGB5LZAemm9ner84Ovy", label: "Auckland" },
+    { id: "shr_1PzUzbGB5LZAemm9Wu1m5e5X", label: "Auckland (Rural)" },
+    { id: "shr_1PzV0qGB5LZAemm9SyKit1cd", label: "North Island" },
+    { id: "shr_1PzV1YGB5LZAemm9cZIEyRKj", label: "North Island (Rural)" },
+    { id: "shr_1PzV2GGB5LZAemm96T7clKr2", label: "South Island" },
+    { id: "shr_1PzV2gGB5LZAemm9GxjL4l4v", label: "South Island (Rural)" },
   ];
 
   res.json(shippingOptions);
@@ -599,6 +634,91 @@ app.get("/my-orders", async (req, res) => {
   } catch (error) {
     console.error("Error fetching user orders:", error);
     return res.status(401).send({ message: "Invalid ID token" });
+  }
+});
+
+// List the signed-in user's saved design files (metadata only;
+// fresh download links are minted per file on demand).
+app.get("/my-files", async (req, res) => {
+  try {
+    const header = req.headers.authorization ?? "";
+    const idToken = header.startsWith("Bearer ") ? header.slice(7) : "";
+    if (!idToken) {
+      return res.status(401).send({ message: "Missing ID token" });
+    }
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    const snap = await db
+      .collection("userFiles")
+      .where("uid", "==", decoded.uid)
+      .limit(100)
+      .get();
+    const files = snap.docs
+      .map((doc) => {
+        const d = doc.data();
+        return {
+          id: doc.id,
+          name: d.name,
+          size: d.size,
+          mime: d.mime,
+          uploadedAt: d.uploadedAt,
+        };
+      })
+      .sort((a, b) => (b.uploadedAt || "").localeCompare(a.uploadedAt || ""));
+    return res.status(200).send({ files });
+  } catch (error) {
+    console.error("Error fetching user files:", error);
+    return res.status(401).send({ message: "Invalid ID token" });
+  }
+});
+
+// Mint a fresh download link for one of the user's own files.
+app.get("/my-files/:id/download", async (req, res) => {
+  try {
+    const header = req.headers.authorization ?? "";
+    const idToken = header.startsWith("Bearer ") ? header.slice(7) : "";
+    if (!idToken) {
+      return res.status(401).send({ message: "Missing ID token" });
+    }
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    const doc = await db.collection("userFiles").doc(req.params.id).get();
+    if (!doc.exists || doc.data().uid !== decoded.uid) {
+      return res.status(404).send({ message: "File not found" });
+    }
+    const file = storage
+      .bucket("porana-print")
+      .file(doc.data().gcsPath);
+    const [url] = await file.getSignedUrl(signedUrlOptions());
+    return res.status(200).send({ fileUrl: url, name: doc.data().name });
+  } catch (error) {
+    console.error("Error generating download link:", error);
+    return res.status(500).send({ message: "Error generating download link" });
+  }
+});
+
+// Delete one of the user's own files (object + metadata).
+app.delete("/my-files/:id", async (req, res) => {
+  try {
+    const header = req.headers.authorization ?? "";
+    const idToken = header.startsWith("Bearer ") ? header.slice(7) : "";
+    if (!idToken) {
+      return res.status(401).send({ message: "Missing ID token" });
+    }
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    const ref = db.collection("userFiles").doc(req.params.id);
+    const doc = await ref.get();
+    if (!doc.exists || doc.data().uid !== decoded.uid) {
+      return res.status(404).send({ message: "File not found" });
+    }
+    try {
+      await storage.bucket("porana-print").file(doc.data().gcsPath).delete();
+    } catch (e) {
+      console.warn("GCS object already gone:", doc.data().gcsPath);
+    }
+    await ref.delete();
+    return res.status(200).send({ message: "File deleted" });
+  } catch (error) {
+    console.error("Error deleting user file:", error);
+    return res.status(500).send({ message: "Error deleting file" });
   }
 });
 
