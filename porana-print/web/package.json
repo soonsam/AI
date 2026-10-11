@@ -12,6 +12,7 @@
   "dependencies": {
     "@unhead/vue": "^3.4.1",
     "axios": "^1.7.6",
+    "firebase": "^11.0.2",
     "ldrs": "^1.0.2",
     "pinia": "^3.0.3",
     "pinia-plugin-persistedstate": "^4.4.1",
