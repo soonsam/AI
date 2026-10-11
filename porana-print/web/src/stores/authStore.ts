@@ -57,10 +57,17 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   function init() {
-    onAuthStateChanged(getFirebaseAuth(), (u) => {
-      user.value = u ? toAuthUser(u) : null;
+    // Auth is optional: if Firebase web config is absent (e.g. env not
+    // set yet), stay logged-out instead of crashing app startup.
+    try {
+      onAuthStateChanged(getFirebaseAuth(), (u) => {
+        user.value = u ? toAuthUser(u) : null;
+        ready.value = true;
+      });
+    } catch (e) {
+      console.warn("Auth disabled:", (e as Error).message);
       ready.value = true;
-    });
+    }
   }
 
   async function getIdToken(): Promise<string | null> {
