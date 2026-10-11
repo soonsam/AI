@@ -1,0 +1,42 @@
+name: Deploy to SiteGround
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "web/**"
+      - ".github/workflows/deploy-frontend.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Install Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: "20.19.0"
+
+      - name: Install dependencies
+        run: cd web && yarn install --frozen-lockfile
+
+      - name: Build for production
+        run: cd web && yarn build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+
+      - name: Deploy to SiteGround
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p 18765 -H ssh.poranaprint.co.nz >> ~/.ssh/known_hosts
+          ls -la ~/.ssh
+          ssh -p 18765 -o StrictHostKeyChecking=no u2422-mz88svnibabc@ssh.poranaprint.co.nz "echo SSH connection successful"
+          rsync -avz -e "ssh -p 18765" --delete web/dist/ u2422-mz88svnibabc@ssh.poranaprint.co.nz:/home/customer/www/poranaprint.co.nz/public_html
