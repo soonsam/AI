@@ -127,7 +127,7 @@ const notifyError = async (error) => {
 
 // FIRESTORE ENDPOINTS
 app.post("/add-item", async (req, res) => {
-  const { cartId, item } = req.body;
+  const { cartId, item, uid } = req.body;
   const cartsCollection = db.collection("carts");
   try {
     // create new cart if no existing cart
@@ -136,6 +136,7 @@ app.post("/add-item", async (req, res) => {
       const newCart = cartsCollection.doc(newCartId);
       await newCart.set({
         items: [item],
+        uid: uid || null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
@@ -157,6 +158,8 @@ app.post("/add-item", async (req, res) => {
     const updatedItems = [...cartData.items, item];
     await cart.update({
       items: updatedItems,
+      // Link the cart to a logged-in user when provided; never wipe it.
+      ...(uid ? { uid } : {}),
       updatedAt: new Date().toISOString(),
     });
 
@@ -475,6 +478,10 @@ app.post("/checkout-success", async (req, res) => {
       totalAmount: session.amount_total / 100,
       currency: session.currency,
       items: fullItems,
+      // Logical cart items (our product IDs) for reorders + owner lookup.
+      sourceItems: cartItems,
+      uid: cartData.uid || null,
+      createdAt: new Date().toISOString(),
     };
 
     console.log("session details", sessionDetails);
@@ -566,6 +573,31 @@ app.post("/auth/sync", async (req, res) => {
       .send({ uid: decoded.uid, email: decoded.email ?? "" });
   } catch (error) {
     console.error("Error syncing user:", error);
+    return res.status(401).send({ message: "Invalid ID token" });
+  }
+});
+
+// Return the signed-in user's own orders (newest first).
+// Sorted in code to avoid requiring a Firestore composite index.
+app.get("/my-orders", async (req, res) => {
+  try {
+    const header = req.headers.authorization ?? "";
+    const idToken = header.startsWith("Bearer ") ? header.slice(7) : "";
+    if (!idToken) {
+      return res.status(401).send({ message: "Missing ID token" });
+    }
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    const snap = await db
+      .collection("orders")
+      .where("uid", "==", decoded.uid)
+      .limit(50)
+      .get();
+    const orders = snap.docs
+      .map((doc) => ({ id: doc.id, ...doc.data() }))
+      .sort((a, b) => (b.orderNumber || 0) - (a.orderNumber || 0));
+    return res.status(200).send({ orders });
+  } catch (error) {
+    console.error("Error fetching user orders:", error);
     return res.status(401).send({ message: "Invalid ID token" });
   }
 });
