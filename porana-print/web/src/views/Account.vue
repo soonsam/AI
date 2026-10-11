@@ -61,6 +61,12 @@
         >
           Reorder these items
         </button>
+        <button
+          @click="downloadInvoice(order)"
+          class="bg-white text-black border-2 border-gray-200 px-4 py-2 rounded-xl mt-4 ml-2"
+        >
+          Download invoice (PDF)
+        </button>
       </div>
     </div>
 
@@ -270,6 +276,28 @@ async function deleteFile(id: string) {
   } catch (e) {
     console.error("Unable to delete file:", e);
     toast.error("Could not delete that file.");
+  }
+}
+
+async function downloadInvoice(order: OrderDoc) {
+  try {
+    const res = await axios.get(
+      `${import.meta.env.VITE_API_URL}/my-orders/${order.id}/invoice`,
+      { headers: await authHeaders(), responseType: "blob" }
+    );
+    const url = URL.createObjectURL(
+      new Blob([res.data], { type: "application/pdf" })
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `invoice-${order.orderNumber ?? order.id}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    console.error("Unable to download invoice:", e);
+    toast.error("Could not download the invoice.");
   }
 }
 

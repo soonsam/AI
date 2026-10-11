@@ -13,7 +13,7 @@ import { fileURLToPath } from "url";
 import { v4 as uuidv4 } from "uuid";
 import { config } from "./config.js";
 import { admin, db } from "./database/firebase.js";
-import { generatePDF } from "./utils/generatePDF.js";
+import { buildInvoicePDF, generatePDF } from "./utils/generatePDF.js";
 import {
   sendInquiryNotification,
   sendOrderConfirmation,
@@ -371,14 +371,13 @@ app.get("/shipping/get-price", async (req, res) => {
 // Define the endpoint to get the shipping options
 app.get("/api/shipping-options", (req, res) => {
   const shippingOptions = [
-    // LOCAL-TEST ONLY: test-mode IDs. DO NOT COMMIT - revert after testing.
-    { id: "shr_1PwyO0GB5LZAemm9kjNh65jZ", label: "Pick Up" },
-    { id: "shr_1PzUyRGB5LZAemm9ner84Ovy", label: "Auckland" },
-    { id: "shr_1PzUzbGB5LZAemm9Wu1m5e5X", label: "Auckland (Rural)" },
-    { id: "shr_1PzV0qGB5LZAemm9SyKit1cd", label: "North Island" },
-    { id: "shr_1PzV1YGB5LZAemm9cZIEyRKj", label: "North Island (Rural)" },
-    { id: "shr_1PzV2GGB5LZAemm96T7clKr2", label: "South Island" },
-    { id: "shr_1PzV2gGB5LZAemm9GxjL4l4v", label: "South Island (Rural)" },
+    { id: "shr_1QBP2WGB5LZAemm9uTtzotZc", label: "Pick Up" },
+    { id: "shr_1TlT0WGB5LZAemm9OYVHBqp9", label: "Auckland" },
+    { id: "shr_1TlT2UGB5LZAemm9sdDUXJAM", label: "Auckland (Rural)" },
+    { id: "shr_1TlT5gGB5LZAemm9hbOzTyPo", label: "North Island" },
+    { id: "shr_1TlT7HGB5LZAemm9nGWEbdgc", label: "North Island (Rural)" },
+    { id: "shr_1QBRToGB5LZAemm9OslOlDev", label: "South Island" },
+    { id: "shr_1TlTBQGB5LZAemm96K4uaCgI", label: "South Island (Rural)" },
   ];
 
   res.json(shippingOptions);
@@ -517,6 +516,25 @@ app.post("/checkout-success", async (req, res) => {
       sourceItems: cartItems,
       uid: cartData.uid || null,
       createdAt: new Date().toISOString(),
+      // Self-contained snapshot for invoice reprints (no live Stripe fetch).
+      invoice: {
+        name: session.customer_details.name,
+        email: session.customer_details.email,
+        phone: session.customer_details.phone,
+        address: {
+          line1: session.shipping_details?.address?.line1 || "",
+          line2: session.shipping_details?.address?.line2 || "",
+          city: session.shipping_details?.address?.city || "",
+          postalCode: session.shipping_details?.address?.postal_code || "",
+        },
+        subtotal: session.amount_subtotal / 100,
+        shipping: session.shipping_cost?.amount_total / 100 ?? 0,
+        tax: session.total_details?.amount_tax / 100 ?? 0,
+        total: session.amount_total / 100,
+        currency: session.currency,
+        paymentMethod: session.payment_method_types?.[0] || "",
+        created: session.created,
+      },
     };
 
     console.log("session details", sessionDetails);
@@ -719,6 +737,35 @@ app.delete("/my-files/:id", async (req, res) => {
   } catch (error) {
     console.error("Error deleting user file:", error);
     return res.status(500).send({ message: "Error deleting file" });
+  }
+});
+
+// Reprint an invoice for one of the user's own orders as a PDF download.
+app.get("/my-orders/:id/invoice", async (req, res) => {
+  try {
+    const header = req.headers.authorization ?? "";
+    const idToken = header.startsWith("Bearer ") ? header.slice(7) : "";
+    if (!idToken) {
+      return res.status(401).send({ message: "Missing ID token" });
+    }
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    const doc = await db.collection("orders").doc(req.params.id).get();
+    if (!doc.exists || doc.data().uid !== decoded.uid) {
+      return res.status(404).send({ message: "Order not found" });
+    }
+    const order = { id: doc.id, ...doc.data() };
+    const pdfDoc = new PDFDocument();
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="invoice-${order.orderNumber || order.id}.pdf"`
+    );
+    pdfDoc.pipe(res);
+    buildInvoicePDF(pdfDoc, order);
+    pdfDoc.end();
+  } catch (error) {
+    console.error("Error generating invoice:", error);
+    return res.status(500).send({ message: "Error generating invoice" });
   }
 });
 
